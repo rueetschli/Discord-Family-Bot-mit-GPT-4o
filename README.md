@@ -97,21 +97,25 @@ löst eine OpenAI-API-Anfrage an dall-e-3 aus und liefert eine Bild-URL zurück.
    ```bash
    git clone https://github.com/deinNutzername/discord-family-bot-gpt4o.git
    cd discord-family-bot-gpt4o
+   ```
 
 2. **Abhängigkeiten installieren**
 ```bash
 pip install --upgrade pip
 pip install -r requirements.txt
+```
 
 3. **main.py anpassen**
 Trage in main.py deinen Discord-Bot- und OpenAI Token ein
 ```bash
 DISCORD_TOKEN = "DEIN_BOT_TOKEN"
 OPENAI_API_KEY = "DEIN_OPENAI_API_KEY"
+```
 
 4. **Bot starten**
 ```bash
 python main.py
+```
 
 ## Konfiguration
 Alle Einstellungen liegen in main.py:
@@ -125,6 +129,7 @@ Alle Einstellungen liegen in main.py:
 Der Befehl /bild wird im Code so definiert:
 ```bash
 @bot.tree.command(name="bild", description="Erstelle ein Bild mit DALL·E 3")
+```
 
 Dieser wird beim Start des Bots synchronisiert.
 Manchmal muss man den Bot neu einladen oder ein paar Minuten warten, bis /bild in Discord sichtbar wird.
