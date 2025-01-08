@@ -71,6 +71,7 @@ Der Bot ist auf den Einsatz in einem kleinen, privaten Discord-Server (z.B. für
 - Der Slash-Befehl:  
   ```bash
   /bild prompt:Ein Einhorn auf Wolken im Cartoon-Stil
+  ```
 löst eine OpenAI-API-Anfrage an dall-e-3 aus und liefert eine Bild-URL zurück.
 
 ## Voraussetzungen
