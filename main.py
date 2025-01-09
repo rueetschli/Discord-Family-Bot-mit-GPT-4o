@@ -656,7 +656,7 @@ def convert_wav_to_ogg(wav_data: bytes) -> bytes:
     try:
         process = subprocess.Popen(
             [
-                '/home/zap1073479/g653825/discordbot/cogs/ffmpeg/ffmpeg',  # Vollständiger Pfad zu FFmpeg
+                '/ffmpeg/ffmpeg',  # Vollständiger Pfad zu FFmpeg
                 '-i', 'pipe:0',          # Eingabe von stdin
                 '-c:a', 'libopus',       # Audio-Codec Opus
                 '-b:a', '96k',           # Bitrate (anpassbar)
