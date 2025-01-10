@@ -19,42 +19,68 @@ import logging
 # ======================================================================
 # Lade Umgebungsvariablen aus einer .env Datei (empfohlen)
 load_dotenv()
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "DEIN_DISCORD_TOKEN_HIER")      # Ersetze durch deinen neuen Discord-Bot-Token
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "DEIN_OPENAI_API_KEY_HIER") # Ersetze durch deinen neuen OpenAI-API-Key
+
+# Discord und OpenAI API-Schlüssel
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+# Modelle für OpenAI
+MODEL_GPT4O = os.getenv("MODEL_GPT4O", "gpt-4o")
+MODEL_AUDIO = os.getenv("MODEL_AUDIO", "gpt-4o-audio-preview")
+
+# OpenAI API Konfiguration
+MAX_TOKENS = int(os.getenv("MAX_TOKENS", 3000))
+TEMPERATURE = float(os.getenv("TEMPERATURE", 0.7))
+
+# Datenbankkonfiguration
+DB_HOST = os.getenv("DB_HOST")
+DB_NAME = os.getenv("DB_NAME")
+DB_USER = os.getenv("DB_USER")
+DB_PASS = os.getenv("DB_PASS")
+
+# Anzahl der gespeicherten Nachrichten pro Benutzer
+MAX_CONVERSATIONS = int(os.getenv("MAX_CONVERSATIONS", 20))
+
+# Anzahl der Nachrichten, für die der Bildkontext genutzt wird
+IMAGE_CONTEXT_LIMIT = int(os.getenv("IMAGE_CONTEXT_LIMIT", 3))
 
 # Whitelist-UserIDs (nur diese können den Bot nutzen)
 WHITELIST = [
-    12345678901234567890,  # Beispiel
-
+    773954516692500521,  # Michael
+    824660719453863936,  # Luca
+    824656617899032596,  # Neo
 ]
 
 # ======================================================================
 # 2. DATENBANK-KONFIG (MySQL/MariaDB)
 # ======================================================================
-DB_HOST = os.getenv("DB_HOST", "")
-DB_NAME = os.getenv("DB_NAME", "")
-DB_USER = os.getenv("DB_USER", "")
-DB_PASS = os.getenv("DB_PASS", "DEIN_DB_PASSWORT_HIER")  
-
 def db_connect():
     """
     Baut eine Verbindung zur MySQL/MariaDB-Datenbank auf.
     """
-    return pymysql.connect(
-        host=DB_HOST,
-        user=DB_USER,
-        password=DB_PASS,
-        database=DB_NAME,
-        charset="utf8mb4",
-        cursorclass=pymysql.cursors.DictCursor
-    )
+    try:
+        connection = pymysql.connect(
+            host=DB_HOST,
+            user=DB_USER,
+            password=DB_PASS,
+            database=DB_NAME,
+            charset="utf8mb4",
+            cursorclass=pymysql.cursors.DictCursor
+        )
+        logger.debug("Datenbankverbindung erfolgreich hergestellt.")
+        return connection
+    except pymysql.MySQLError as e:
+        logger.error(f"Datenbankverbindungsfehler: {e}")
+        raise
 
 def init_db():
     """
     Legt die Tabellen user_conversations und user_images an, falls sie nicht existieren.
+    Fügt die Spalte image_context_counter hinzu, falls sie fehlt.
     """
     con = db_connect()
     with con.cursor() as cur:
+        # Tabelle user_conversations erstellen
         cur.execute("""
         CREATE TABLE IF NOT EXISTS user_conversations (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -64,15 +90,32 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """)
+        
+        # Tabelle user_images erstellen
         cur.execute("""
         CREATE TABLE IF NOT EXISTS user_images (
             user_id BIGINT PRIMARY KEY,
             image_data JSON,
+            image_context_counter INT DEFAULT 0,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
         )
         """)
+        
+        # Überprüfen, ob die Spalte image_context_counter existiert, und sie hinzufügen, falls nicht
+        cur.execute("""
+        SHOW COLUMNS FROM user_images LIKE 'image_context_counter';
+        """)
+        result = cur.fetchone()
+        if not result:
+            cur.execute("""
+            ALTER TABLE user_images
+            ADD COLUMN image_context_counter INT DEFAULT 0;
+            """)
+            logger.info("Spalte 'image_context_counter' zur Tabelle 'user_images' hinzugefügt.")
+        
     con.commit()
     con.close()
+    logger.info("[Info] Datenbank initialisiert und aktualisiert.")
 
 # ======================================================================
 # 3. INSTANTIIERTEN CLIENT (OpenAI v1.x)
@@ -83,7 +126,14 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 # ======================================================================
 # 4. LOGGING KONFIGURATION
 # ======================================================================
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.DEBUG,  # Erhöht das Logging-Level auf DEBUG
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("bot.log"),  # Log-Datei
+        logging.StreamHandler()          # Log-Ausgabe in der Konsole
+    ]
+)
 logger = logging.getLogger(__name__)
 
 # ======================================================================
@@ -124,8 +174,9 @@ def save_message_to_db(user_id: int, role: str, content: str):
         cur.execute(sql, (user_id, role, content))
     con.commit()
     con.close()
+    logger.debug(f"[DB] Nachricht gespeichert: user_id={user_id}, role={role}, content={content}")
 
-def ensure_limit_in_db(user_id: int, limit=20):
+def ensure_limit_in_db(user_id: int, limit=MAX_CONVERSATIONS):
     """
     Löscht alte Einträge, falls mehr als 'limit' Nachrichten pro User in DB.
     """
@@ -147,36 +198,58 @@ def ensure_limit_in_db(user_id: int, limit=20):
                 placeholders = ",".join(["%s"] * len(ids_to_delete))
                 sql = f"DELETE FROM user_conversations WHERE id IN ({placeholders})"
                 cur.execute(sql, tuple(ids_to_delete))
+                logger.debug(f"[DB] Alte Nachrichten gelöscht: IDs={ids_to_delete}")
     con.commit()
     con.close()
 
-def get_stored_image(user_id: int) -> list:
+def get_stored_image(user_id: int) -> dict:
     """
-    Holt das gespeicherte Bild für den Benutzer, falls vorhanden.
+    Holt das gespeicherte Bild und den Kontextzähler für den Benutzer, falls vorhanden.
     """
     con = db_connect()
     with con.cursor() as cur:
-        cur.execute("SELECT image_data FROM user_images WHERE user_id=%s", (user_id,))
+        cur.execute("SELECT image_data, image_context_counter FROM user_images WHERE user_id=%s", (user_id,))
         row = cur.fetchone()
         if row:
-            return json.loads(row["image_data"])
+            logger.debug(f"[DB] Bildkontext gefunden für user_id={user_id}")
+            return {
+                "image_data": json.loads(row["image_data"]),
+                "image_context_counter": row["image_context_counter"]
+            }
     con.close()
-    return []
+    logger.debug(f"[DB] Kein Bildkontext gefunden für user_id={user_id}")
+    return {"image_data": [], "image_context_counter": 0}
 
 def store_image(user_id: int, image_content: list):
     """
-    Speichert das Bild für den Benutzer in der DB.
+    Speichert das Bild für den Benutzer in der DB und setzt den Kontextzähler.
     """
     image_json = json.dumps(image_content)
     con = db_connect()
     with con.cursor() as cur:
         cur.execute("""
-            INSERT INTO user_images (user_id, image_data)
-            VALUES (%s, %s)
-            ON DUPLICATE KEY UPDATE image_data=%s, updated_at=NOW()
-        """, (user_id, image_json, image_json))
+            INSERT INTO user_images (user_id, image_data, image_context_counter)
+            VALUES (%s, %s, %s)
+            ON DUPLICATE KEY UPDATE image_data=%s, image_context_counter=%s, updated_at=NOW()
+        """, (user_id, image_json, IMAGE_CONTEXT_LIMIT, image_json, IMAGE_CONTEXT_LIMIT))
     con.commit()
     con.close()
+    logger.debug(f"[DB] Bildkontext für user_id={user_id} gespeichert/aktualisiert.")
+
+def decrement_image_context(user_id: int):
+    """
+    Verringert den Bildkontextzähler für den Benutzer um 1.
+    """
+    con = db_connect()
+    with con.cursor() as cur:
+        cur.execute("""
+            UPDATE user_images
+            SET image_context_counter = image_context_counter - 1
+            WHERE user_id = %s AND image_context_counter > 0
+        """, (user_id,))
+    con.commit()
+    con.close()
+    logger.debug(f"[DB] Bildkontextzähler für user_id={user_id} dekrementiert.")
 
 # ======================================================================
 # 6. DISCORD BOT
@@ -196,6 +269,7 @@ def get_user_conversation(user_id: int) -> list:
             {"role": "system", "content": "Du bist ein Assistent für diese Familie."}
         ]
         save_message_to_db(user_id, "system", user_conversations_cache[user_id][0]["content"])
+        logger.debug(f"[Cache] Neuer Chatverlauf für user_id={user_id} erstellt.")
     return user_conversations_cache[user_id]
 
 # ======================================================================
@@ -205,10 +279,11 @@ def get_user_conversation(user_id: int) -> list:
 @app_commands.describe(prompt="Was soll gemalt werden?")
 async def slash_bild_command(interaction: discord.Interaction, prompt: str):
     """
-    Erstellt ein Bild via DALL-E 3 (mit neuem client.images.generate).
+    Erstellt ein Bild via DALL-E 3.
     """
     if interaction.user.id not in WHITELIST:
         await interaction.response.send_message("Du bist nicht berechtigt.", ephemeral=True)
+        logger.warning(f"[Zugriff verweigert] user_id={interaction.user.id}")
         return
 
     await interaction.response.defer(thinking=True)
@@ -221,19 +296,20 @@ async def slash_bild_command(interaction: discord.Interaction, prompt: str):
         )
         image_url = response.data[0].url
         await interaction.followup.send(f"Hier ist dein Bild:\n{image_url}")
-        
+        logger.info(f"[Bild erstellt] user_id={interaction.user.id}, prompt='{prompt}'")
+
         # Speichere die Bildanfrage und die Antwort in der DB
         convo = get_user_conversation(interaction.user.id)
         convo.append({"role": "user", "content": f"/bild {prompt}"})
         save_message_to_db(interaction.user.id, "user", f"/bild {prompt}")
-        
+
         convo.append({"role": "assistant", "content": f"Hier ist dein Bild:\n{image_url}"})
         save_message_to_db(interaction.user.id, "assistant", f"Hier ist dein Bild:\n{image_url}")
-        ensure_limit_in_db(interaction.user.id, limit=20)
-        
-        # Speichere das Bild für zukünftige Anfragen
+        ensure_limit_in_db(interaction.user.id, limit=MAX_CONVERSATIONS)
+
+        # Speichere das Bild für zukünftige Anfragen und setze den Kontextzähler
         image_content = [
-            {"type": "text", "text": "Du hast ein Bild in der Beilage. Mache was der Benutzer wünscht."},
+            {"type": "text", "text": "Du hast ein Bild in der Beilage. Mache, was der Benutzer wünscht."},
             {
                 "type": "image_url",
                 "image_url": {
@@ -243,7 +319,7 @@ async def slash_bild_command(interaction: discord.Interaction, prompt: str):
             }
         ]
         store_image(interaction.user.id, image_content)
-        
+
     except Exception as e:
         logger.error(f"[Fehler bei DALL-E 3] {e}")
         await interaction.followup.send(f"[Fehler bei DALL-E 3] {e}")
@@ -313,15 +389,20 @@ async def on_message(message: discord.Message):
         # Verarbeitung des Textes zusammen mit den Bildern
         if image_contents or text:
             # Lade das gespeicherte Bild, falls vorhanden
-            stored_image = get_stored_image(user_id)
+            stored_image_info = get_stored_image(user_id)
+            stored_image = stored_image_info["image_data"]
+            image_context_counter = stored_image_info["image_context_counter"]
+
             if image_contents:
                 # Flachmachen der Bildinhalte
                 flat_image_contents = [item for sublist in image_contents for item in sublist]
-                # Update das gespeicherte Bild mit den neuen Bildern
+                # Update das gespeicherte Bild mit den neuen Bildern und setze den Kontextzähler
                 store_image(user_id, flat_image_contents)
                 stored_image = flat_image_contents
+                image_context_counter = IMAGE_CONTEXT_LIMIT
 
-            if stored_image:
+            # Entscheide, ob der Bildkontext eingebunden werden soll
+            if image_context_counter > 0:
                 messages = [
                     {
                         "role": "user",
@@ -343,22 +424,27 @@ async def on_message(message: discord.Message):
 
             try:
                 response = client.chat.completions.create(
-                    model="gpt-4o",
+                    model=MODEL_GPT4O,
                     messages=convo + messages,
-                    max_tokens=3000,
-                    temperature=0.7
+                    max_tokens=MAX_TOKENS,
+                    temperature=TEMPERATURE
                 )
                 answer = response.choices[0].message.content
 
                 # Sende die Antwort an Discord
                 await send_in_chunks(message.channel, answer)
+                logger.info(f"[Antwort gesendet] user_id={user_id}, message='{text}'")
 
                 # Speichere die Antwort in der DB
                 convo.append({"role": "user", "content": text})
                 save_message_to_db(user_id, "user", text)
                 convo.append({"role": "assistant", "content": answer})
                 save_message_to_db(user_id, "assistant", answer)
-                ensure_limit_in_db(user_id, limit=20)
+                ensure_limit_in_db(user_id, limit=MAX_CONVERSATIONS)
+
+                # Decrementiere den Bildkontextzähler
+                if image_context_counter > 0:
+                    decrement_image_context(user_id)
 
             except Exception as e:
                 logger.error(f"[Fehler GPT-4o] {e}")
@@ -408,9 +494,11 @@ async def on_message(message: discord.Message):
 
     elif text:
         # Verarbeitung nur von Text, eventuell mit gespeicherten Bildern
-        stored_image = get_stored_image(user_id)
+        stored_image_info = get_stored_image(user_id)
+        stored_image = stored_image_info["image_data"]
+        image_context_counter = stored_image_info["image_context_counter"]
 
-        if stored_image:
+        if image_context_counter > 0 and stored_image:
             messages = [
                 {
                     "role": "user",
@@ -432,22 +520,27 @@ async def on_message(message: discord.Message):
 
         try:
             response = client.chat.completions.create(
-                model="gpt-4o",
+                model=MODEL_GPT4O,
                 messages=convo + messages,
-                max_tokens=3000,
-                temperature=0.7
+                max_tokens=MAX_TOKENS,
+                temperature=TEMPERATURE
             )
             answer = response.choices[0].message.content
 
             # Sende die Antwort an Discord
             await send_in_chunks(message.channel, answer)
+            logger.info(f"[Antwort gesendet] user_id={user_id}, message='{text}'")
 
             # Speichere die Antwort in der DB
             convo.append({"role": "user", "content": text})
             save_message_to_db(user_id, "user", text)
             convo.append({"role": "assistant", "content": answer})
             save_message_to_db(user_id, "assistant", answer)
-            ensure_limit_in_db(user_id, limit=20)
+            ensure_limit_in_db(user_id, limit=MAX_CONVERSATIONS)
+
+            # Decrementiere den Bildkontextzähler
+            if image_context_counter > 0:
+                decrement_image_context(user_id)
 
         except Exception as e:
             logger.error(f"[Fehler GPT-4o] {e}")
@@ -463,10 +556,9 @@ async def process_image_attachment(message: discord.Message, attachment: discord
     Verarbeitet einen Bildanhang und gibt die strukturierte Content-Liste zurück.
     """
     try:
-        # Lade das Bild herunter und konvertiere es zu Base64 (falls benötigt)
         # Hier wird nur die URL verwendet, daher kein Download notwendig
         image_content = [
-            {"type": "text", "text": "Du hast ein Bild in der Beilage. Mache was der Benutzer wünscht."},
+            {"type": "text", "text": "Du hast ein Bild in der Beilage. Mache, was der Benutzer wünscht."},
             {
                 "type": "image_url",
                 "image_url": {
@@ -475,6 +567,7 @@ async def process_image_attachment(message: discord.Message, attachment: discord
                 }
             }
         ]
+        logger.debug(f"[Bild verarbeitet] user_id={message.author.id}, URL={attachment.url}")
         return image_content
     except Exception as e:
         logger.error(f"[Fehler bei der Bildanhang-Verarbeitung] {e}")
@@ -506,7 +599,7 @@ async def handle_pdf_to_text(message: discord.Message, attachment: discord.Attac
             f"Der Nutzer fragt: '{user_query}'"
         )
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model=MODEL_GPT4O,
             messages=[
                 {"role": "system", "content": system_text},
                 {
@@ -516,13 +609,14 @@ async def handle_pdf_to_text(message: discord.Message, attachment: discord.Attac
                     )
                 }
             ],
-            max_tokens=3000,
-            temperature=0.7
+            max_tokens=MAX_TOKENS,
+            temperature=TEMPERATURE
         )
         answer = response.choices[0].message.content
 
         # Sende die Antwort an Discord
         await send_in_chunks(message.channel, answer)
+        logger.info(f"[PDF-Antwort gesendet] user_id={user_id}, PDF={attachment.filename}")
 
         # Speichere die PDF-Anfrage und die Antwort in der DB
         convo = get_user_conversation(user_id)
@@ -531,7 +625,7 @@ async def handle_pdf_to_text(message: discord.Message, attachment: discord.Attac
 
         convo.append({"role": "assistant", "content": answer})
         save_message_to_db(user_id, "assistant", answer)
-        ensure_limit_in_db(user_id, limit=20)
+        ensure_limit_in_db(user_id, limit=MAX_CONVERSATIONS)
 
     except Exception as e:
         logger.error(f"[Fehler bei PDF-Verarbeitung] {e}")
@@ -581,10 +675,10 @@ async def handle_audio_message(message: discord.Message, attachment: discord.Att
         ]
 
         response = client.chat.completions.create(
-            model="gpt-4o-audio-preview",  # Beta
+            model=MODEL_AUDIO,  # gpt-4o-audio-preview
             messages=messages,
-            max_tokens=3000,
-            temperature=0.7
+            max_tokens=MAX_TOKENS,
+            temperature=TEMPERATURE
         )
 
         # 5) Antwort verarbeiten
@@ -593,6 +687,12 @@ async def handle_audio_message(message: discord.Message, attachment: discord.Att
             ans.audio.transcript if hasattr(ans, "audio") else "(Keine Textantwort erhalten)"
         )
         audio_info = ans.audio if hasattr(ans, "audio") else None
+
+        # Speichern der Benutzeranfrage (transkribierter Text)
+        user_transcript = ans.audio.transcript if hasattr(ans, "audio") else text_answer
+        convo = get_user_conversation(user_id)
+        convo.append({"role": "user", "content": user_transcript})
+        save_message_to_db(user_id, "user", user_transcript)
 
         if audio_info and audio_info.data:
             # Audio-Daten dekodieren
@@ -610,12 +710,12 @@ async def handle_audio_message(message: discord.Message, attachment: discord.Att
                 text_answer,
                 file=discord.File(ogg_io, filename=filename)
             )
+            logger.info(f"[Audio-Antwort gesendet] user_id={user_id}, message_id={message.id}")
 
             # Speichere die Audioantwort in der DB
-            convo = get_user_conversation(user_id)
             convo.append({"role": "assistant", "content": text_answer})
             save_message_to_db(user_id, "assistant", text_answer)
-            ensure_limit_in_db(user_id, limit=20)
+            ensure_limit_in_db(user_id, limit=MAX_CONVERSATIONS)
         else:
             # Nur Text, kein Audio
             await message.channel.send(text_answer)
@@ -623,7 +723,7 @@ async def handle_audio_message(message: discord.Message, attachment: discord.Att
             convo = get_user_conversation(user_id)
             convo.append({"role": "assistant", "content": text_answer})
             save_message_to_db(user_id, "assistant", text_answer)
-            ensure_limit_in_db(user_id, limit=20)
+            ensure_limit_in_db(user_id, limit=MAX_CONVERSATIONS)
 
     except Exception as e:
         logger.error(f"[Fehler bei GPT-4o-Audio] {e}")
@@ -636,6 +736,7 @@ async def send_in_chunks(channel: discord.abc.Messageable, text: str):
     chunk_size = 2000
     for i in range(0, len(text), chunk_size):
         await channel.send(text[i:i+chunk_size])
+    logger.debug(f"[Chunked Output] Gesendet: {len(text)} Zeichen in {len(text) // chunk_size + 1} Nachrichten.")
 
 # ======================================================================
 # 13. Konvertierungsfunktion: WAV zu OGG mit FFmpeg
@@ -654,16 +755,17 @@ def convert_wav_to_ogg(wav_data: bytes) -> bytes:
         Exception: Wenn die Konvertierung fehlschlägt.
     """
     try:
+        ffmpeg_path = os.getenv("FFMPEG_PATH", "ffmpeg")  # Fallback auf 'ffmpeg' im PATH
         process = subprocess.Popen(
             [
-                '/ffmpeg/ffmpeg',  # Vollständiger Pfad zu FFmpeg
-                '-i', 'pipe:0',          # Eingabe von stdin
-                '-c:a', 'libopus',       # Audio-Codec Opus
-                '-b:a', '96k',           # Bitrate (anpassbar)
-                '-ar', '48000',          # Abtastrate 48000 Hz
-                '-ac', '1',              # Mono-Kanal
-                '-f', 'ogg',             # Ausgabeformat OGG
-                'pipe:1'                 # Ausgabe zu stdout
+                ffmpeg_path,               # Pfad zu FFmpeg
+                '-i', 'pipe:0',            # Eingabe von stdin
+                '-c:a', 'libopus',         # Audio-Codec Opus
+                '-b:a', '96k',             # Bitrate (anpassbar)
+                '-ar', '48000',            # Abtastrate 48000 Hz
+                '-ac', '1',                # Mono-Kanal
+                '-f', 'ogg',               # Ausgabeformat OGG
+                'pipe:1'                   # Ausgabe zu stdout
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -675,6 +777,8 @@ def convert_wav_to_ogg(wav_data: bytes) -> bytes:
         return ogg_data
     except FileNotFoundError:
         raise Exception("FFmpeg ist nicht installiert oder nicht im angegebenen Pfad verfügbar.")
+    except Exception as e:
+        raise Exception(f"Fehler bei der Konvertierung: {e}")
 
 # ======================================================================
 # 14. BOT START
