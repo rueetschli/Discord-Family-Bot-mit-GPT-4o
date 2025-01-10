@@ -684,9 +684,9 @@ async def handle_audio_message(message: discord.Message, attachment: discord.Att
         # 5) Antwort verarbeiten
         ans = response.choices[0].message
 
-        # Extrahiere den transkribierten Text sicher
+        # 6) Extrahiere den transkribierten Text sicher
         user_transcript = None
-        if hasattr(ans, "audio") and ans.audio is not None:
+        if hasattr(ans, "audio") and ans.audio is not None and hasattr(ans.audio, "transcript"):
             user_transcript = ans.audio.transcript
         elif hasattr(ans, "content") and ans.content:
             # Fallback: falls 'audio' nicht vorhanden ist, nutze 'content'
@@ -701,11 +701,11 @@ async def handle_audio_message(message: discord.Message, attachment: discord.Att
             user_transcript = "(Keine Benutzeranfrage erkannt)"
             logger.warning(f"[Voice-Chat] Keine Transkription für user_id={user_id} erhalten.")
 
-        # Extrahiere die Antwort des Bots
+        # 7) Extrahiere die Antwort des Bots
         text_answer = ans.content if ans.content else "(Keine Antwort erhalten)"
         audio_info = ans.audio if hasattr(ans, "audio") and ans.audio is not None else None
 
-        if audio_info and audio_info.data:
+        if audio_info and hasattr(audio_info, "data") and audio_info.data:
             # Audio-Daten dekodieren
             audio_reply = base64.b64decode(audio_info.data)
 
