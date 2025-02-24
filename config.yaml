@@ -1,0 +1,52 @@
+# Beispielkonfiguration
+
+# Bot-Token und Client-ID (für den Invite-Link)
+bot_token: "DEIN-Discord-Bot-Token"
+client_id: "Deine-Client-ID"
+
+# Statusnachricht (wird als Custom Activity gesetzt)
+status_message: "Powered by Casa Rueetschli"
+
+# Erlaube Direktnachrichten?
+allow_dms: true
+
+#Erinnerungen Anzahlmax_messages: 10
+max_messages: 10
+
+
+# Berechtigungen für Nutzer, Rollen und Channels (kann leer bleiben, da Whitelist separat gehandhabt wird)
+permissions:
+  users:
+    allowed_ids: []
+    blocked_ids: []
+  roles:
+    allowed_ids: []
+    blocked_ids: []
+  channels:
+    allowed_ids: []
+    blocked_ids: []
+
+# Modell und Anbieter im Format "anbieter/modell"
+model: "openai/gpt-4o"
+
+# Anbieter-Einstellungen
+providers:
+  openai:
+    base_url: "https://api.openai.com/v1"
+    api_key: "DEIN-OPENAI-API-KEY"
+
+# Maximale Zeichen aus Textinhalten pro Nachricht (bei Anhängen)
+max_text: 15000
+# Maximale Anzahl der Bilder pro Nachricht (falls Bildmodelle unterstützt werden)
+max_images: 30
+# Maximale Anzahl von Nachrichten im Konversationsverlauf, die rückwärts abgerufen werden
+max_messages: 100
+
+# Soll die Antwort als reiner Text (ohne Embed) ausgegeben werden?
+use_plain_responses: false
+
+# System-Prompt, der am Ende der Nachrichtenkette angehängt wird
+system_prompt: "Du bist ein hilfreicher OpenAI-Chatbot. Antworte möglichst ausführlich und benutze präzise Formulierungen."
+
+# Extra API-Parameter, falls benötigt
+extra_api_parameters: {}
