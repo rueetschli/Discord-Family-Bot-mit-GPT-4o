@@ -1,4 +1,4 @@
-#Kevin – Denkender Discord-Bot mit PDF- und LaTeX-Funktionalität
+# Kevin – Denkender Discord-Bot mit PDF- und LaTeX-Funktionalität
 
 
 
