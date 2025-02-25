@@ -23,7 +23,6 @@ Willkommen bei Kevin, Deinem AI-basierten Discord-Bot! Du kannst ihn als persön
 - Ein funktionierendes Discord-Bot-Token
 - Ein OpenAI-API-Key
 - Eine Umgebung, in der Du Python-Bibliotheken aus der requirements.txt installieren kannst
-- Internetzugriff, damit CodeCogs für das LaTeX-Rendering erreichbar ist
 
 
 ## Installation
