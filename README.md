@@ -74,5 +74,8 @@ python3 main.py
 - GPT-4o Vision ist nicht unfehlbar (besonders bei kleinen Details, Text in Bildern, speziellen Grafiken).
 
 
+<img width="539" alt="image" src="https://github.com/user-attachments/assets/a1c002ea-5b67-4365-a734-9b23f5e474c7" />
+
+
 
 
