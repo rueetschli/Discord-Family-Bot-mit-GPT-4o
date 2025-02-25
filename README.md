@@ -1,4 +1,6 @@
-# Discord Family Bot mit GPT-4o (Vision, PDF-Verarbeitung) und DALL·E 3
+#Kevin – Denkender Discord-Bot mit PDF- und LaTeX-Funktionalität
+
+
 
 Willkommen bei Kevin, Deinem AI-basierten Discord-Bot! Du kannst ihn als persönlichen Assistenten für Textfragen, PDF-Analyse und LaTeX-Rendering verwenden. Kevin nutzt die OpenAI-API und bietet so intelligente Antworten in Deinem Discord-Kanal.
 
