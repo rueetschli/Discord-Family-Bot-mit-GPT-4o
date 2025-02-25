@@ -3,30 +3,36 @@
 
 import asyncio
 import logging
-from typing import Literal, Optional
-from dataclasses import dataclass, field
 from datetime import datetime as dt
 from base64 import b64encode
 from collections import defaultdict
+import re
+import io
+import urllib.parse
 
 import discord
 import httpx
 import yaml
+import pdfplumber
+import matplotlib.pyplot as plt
+
+# Wichtig: Aus dem neuen SDK ab v1.0.0
 from openai import AsyncOpenAI
+
+from PIL import Image
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s: %(message)s",
 )
 
-# ------------------------------------
-# 1) CONFIG & KONSTANTEN
-# ------------------------------------
+##############################################################################
+# 1) CONFIG LADEN
+##############################################################################
 def load_config(filename="config.yaml"):
     try:
         with open(filename, "r") as f:
-            data = yaml.safe_load(f)
-        return data if data else {}
+            return yaml.safe_load(f) or {}
     except Exception as e:
         logging.error(f"Fehler beim Laden von {filename}: {e}")
         return {}
@@ -39,79 +45,156 @@ if not BOT_TOKEN:
 
 provider, model = cfg["model"].split("/", 1)
 base_url = cfg["providers"][provider]["base_url"]
-api_key = cfg["providers"][provider].get("api_key", "sk-???")
+api_key  = cfg["providers"][provider].get("api_key", "sk-???")
 
-# Falls Vision-Features
-VISION_MODEL_TAGS = ("gpt-4v", "vision", "vl", "llava")
-IS_VISION = any(tag in model.lower() for tag in VISION_MODEL_TAGS)
+##############################################################################
+# 2) OPENAI-CLIENT (AsyncOpenAI)
+##############################################################################
+# Kein openai.ChatCompletion mehr!
+# Ab v1.0.0 nutzt man den eigenständigen Client.
+openai_client = AsyncOpenAI(
+    api_key=api_key,
+    base_url=base_url,
+    # Falls Du weitere Optionen brauchst, z.B. default_headers, proxies etc.
+    # default_headers={"x-my-header": "123"},
+    # proxies={"https": "http://proxy:8080"},
+)
 
-ALLOWED_FILE_TYPES = ("image", "pdf", "text")  # => Bilder/PDFs/Text
 MAX_MESSAGES = cfg.get("max_messages", 10)
 MAX_TEXT = cfg.get("max_text", 1500)
-USE_STREAM = False  # hier kein Streaming, da wir den gesamten Verlauf auf einmal schicken
 
-# Optional: System-Prompt
 SYSTEM_PROMPT = cfg.get("system_prompt", "")
 if SYSTEM_PROMPT:
     SYSTEM_PROMPT += f"\n(Heutiges Datum: {dt.now().strftime('%Y-%m-%d')})"
 
-# ------------------------------------
-# 2) DISCORD & SPEICHER FÜR VERLÄUFE
-# ------------------------------------
+##############################################################################
+# 3) DISCORD CLIENT
+##############################################################################
 intents = discord.Intents.default()
 intents.message_content = True
-
 discord_client = discord.Client(intents=intents)
-httpx_client = httpx.AsyncClient()
 
-# Jede Channel-ID bekommt seine eigene Chat-Historie (Liste von {role, content})
+# Speichert pro Channel die Chat-Historie
 channel_history = defaultdict(list)
 
-# ------------------------------------
-# 3) HILFSFUNKTION: ANHÄNGE => GPT-4V
-# ------------------------------------
-async def convert_attachments_to_gpt4v_format(msg: discord.Message):
-    """
-    Liest die Attachments und baut die GPT-4 Vision 'content' Einträge,
-    z.B. "type=image_url" oder "type=file" für PDFs.
-    """
-    contents = []
+##############################################################################
+# 4) LATEX-ERKENNUNG UND RENDERING VIA CODECOGS
+##############################################################################
+# In Python 3.12 sind Backslashes streng, wir verwenden doppelte oder Regex.
+# $$...$$
+regex_block_dollar    = re.compile(r'\$\$(.*?)\$\$', re.DOTALL)
+# $...$ (kein doppeltes $$)
+regex_inline_dollar   = re.compile(r'(?<!\\)\$(?!\$)(.*?)(?<!\\)\$(?!\$)', re.DOTALL)
+# \[...\]
+regex_block_brackets  = re.compile(r'\\\[([\s\S]*?)\\\]', re.DOTALL)
+# \(...\)
+regex_inline_paren    = re.compile(r'\\\(([\s\S]*?)\\\)', re.DOTALL)
 
-    # Start: reiner Text
+def extract_latex_expressions(text: str):
+    """
+    Sucht LaTeX-Ausdrücke in:
+      - $$ ... $$
+      - $ ... $
+      - \[ ... \]
+      - \( ... \)
+    Gibt Liste mit allen Ausdrücken (duplikatfrei, getrimmt) zurück.
+    """
+    found = []
+    found += regex_block_dollar.findall(text)
+    found += regex_inline_dollar.findall(text)
+    found += regex_block_brackets.findall(text)
+    found += regex_inline_paren.findall(text)
+
+    # Duplikate entfernen und Leerzeichen trimmen
+    expressions = list({expr.strip() for expr in found if expr.strip()})
+    return expressions
+
+async def fetch_latex_png(latex_code: str) -> bytes:
+    """
+    Rendert LaTeX-Code via CodeCogs (externer Dienst).
+    """
+    safe_expr = urllib.parse.quote(latex_code, safe='')
+    # \dpi{150} = mittlere Auflösung, \large = vergrösserte Schrift
+    url = f"https://latex.codecogs.com/png.latex?\\dpi{{150}}\\bg_white\\large {safe_expr}"
+
+    async with httpx.AsyncClient() as c:
+        resp = await c.get(url)
+        resp.raise_for_status()
+        return resp.content
+
+async def render_latex_image(latex_expressions):
+    """
+    Ruft CodeCogs für jeden Ausdruck auf und packt alle Einzelergebnisse
+    in ein einziges PNG (untereinander).
+    """
+    if not latex_expressions:
+        return None
+
+    images = []
+    for expr in latex_expressions:
+        try:
+            png_data = await fetch_latex_png(expr)
+            img = Image.open(io.BytesIO(png_data)).convert("RGBA")
+            images.append(img)
+        except Exception as e:
+            logging.warning(f"Fehler beim Laden gerenderter LaTeX-Grafik für '{expr}': {e}")
+
+    if not images:
+        return None
+
+    max_width = max(img.width for img in images)
+    total_height = sum(img.height for img in images)
+    merged = Image.new("RGBA", (max_width, total_height), (255, 255, 255, 0))
+
+    y_offset = 0
+    for img in images:
+        merged.paste(img, (0, y_offset))
+        y_offset += img.height
+
+    buf = io.BytesIO()
+    merged.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+##############################################################################
+# 5) PDF-EXTRAKTION (pdfplumber)
+##############################################################################
+async def convert_attachments_to_gpt4v_format(msg: discord.Message):
+    contents = []
     text_part = msg.content.strip()
     if text_part:
-        # user-Eingabetext
         contents.append({"type": "text", "text": text_part[:MAX_TEXT]})
 
-    # Attachments
     for att in msg.attachments:
         ctype = att.content_type or ""
         try:
-            # => ctype könnte "image/png", "application/pdf", "text/plain", ...
+            data = await att.read()
             if any(t in ctype for t in ("image/", "pdf", "text")):
-                data = await att.read()
-                b64_data = b64encode(data).decode("utf-8")
-
                 if ctype.startswith("image/"):
-                    # GPT-4 Vision => "image_url"
                     contents.append({
                         "type": "image_url",
-                        "image_url": {"url": f"data:{ctype};base64,{b64_data}"}
+                        "image_url": {"url": f"data:{ctype};base64,{b64encode(data).decode('utf-8')}"}
                     })
                 elif "pdf" in ctype:
-                    # PDF => "file"
-                    contents.append({
-                        "type": "file",
-                        "file": {"url": f"data:{ctype};base64,{b64_data}"}
-                    })
+                    try:
+                        with pdfplumber.open(io.BytesIO(data)) as pdf:
+                            text_str = ""
+                            for page in pdf.pages:
+                                page_text = page.extract_text()
+                                if page_text:
+                                    text_str += page_text + "\n"
+                        text_str = text_str.strip()
+                        if text_str:
+                            if contents and contents[-1]["type"] == "text":
+                                contents[-1]["text"] += f"\n{text_str[:MAX_TEXT]}"
+                            else:
+                                contents.append({"type": "text", "text": text_str[:MAX_TEXT]})
+                        else:
+                            logging.info(f"Kein Text im PDF {att.filename} gefunden.")
+                    except Exception as e:
+                        logging.warning(f"Fehler beim Extrahieren des Textes aus {att.filename}: {e}")
                 elif ctype.startswith("text/"):
-                    # reinen Text-File-Inhalt an text_part anhängen?
-                    # oder wir packen es als "text" ...
                     text_str = data.decode("utf-8", errors="replace")
-                    # z.B. => an vorhandenen Text anhängen
-                    # wenn du das lieber separat machen willst, kann man
-                    # contents.append({"type": "text", "text": text_str[:MAX_TEXT]})
-                    # hier mal: direkt an user text anfügen:
                     if contents and contents[-1]["type"] == "text":
                         contents[-1]["text"] += f"\n{text_str}"
                     else:
@@ -123,72 +206,62 @@ async def convert_attachments_to_gpt4v_format(msg: discord.Message):
         except Exception as e:
             logging.warning(f"Fehler beim Lesen von {att.filename}: {e}")
 
-    # Falls nichts => leere Zeichenkette
     if not contents:
         return ""
-
-    # Falls nur ein Eintrag und es "type=text" => direkt content
     if len(contents) == 1 and contents[0]["type"] == "text":
-        return contents[0]["text"]  # normaler String
+        return contents[0]["text"]
     return contents
 
-# ------------------------------------
-# 4) ON_MESSAGE-EVENT
-# ------------------------------------
+##############################################################################
+# 6) DISCORD-LOGIK
+##############################################################################
+@discord_client.event
+async def on_ready():
+    logging.info(f"Bot eingeloggt als {discord_client.user} (ID: {discord_client.user.id})")
+
 @discord_client.event
 async def on_message(msg: discord.Message):
-    # 1) Bot ignoriert eigene Nachrichten
     if msg.author.bot:
         return
 
-    # 2) Die Eingabe des Users in GPT-4V-Format konvertieren
     user_content = await convert_attachments_to_gpt4v_format(msg)
-
-    # 3) In channel_history ablegen
     channel_id = msg.channel.id
     channel_hist = channel_history[channel_id]
 
-    # Ggf. begrenzen auf die letzten MAX_MESSAGES (Assistant+User). 
-    # Hier ein simpler Trim:
+    # Verlauf begrenzen
     while len(channel_hist) > 2 * MAX_MESSAGES:
         channel_hist.pop(0)
 
-    # a) system prompt, falls gewünscht (einmalig am Anfang)
-    #    Du kannst den System-Prompt auch immer wieder am Ende anhängen.
+    # Einmalig System-Prompt
     if SYSTEM_PROMPT and not channel_hist:
         channel_hist.append({"role": "system", "content": SYSTEM_PROMPT})
 
-    # b) user message an Historie anhängen
-    #    (kein "name" -> wir vermeiden die Numerik/Halluzination)
     channel_hist.append({"role": "user", "content": user_content})
 
-    # 4) Alles an OpenAI schicken
-    openai_client = AsyncOpenAI(base_url=base_url, api_key=api_key)
-    # Wir geben dem Modell den gesamten Verlauf:
+    # Baue die Parameter für den AsyncOpenAI-Aufruf
     kwargs = {
         "model": model,
         "messages": channel_hist,
-        "stream": USE_STREAM,
-        "extra_body": cfg.get("extra_api_parameters", {})
+        **cfg.get("extra_api_parameters", {})
     }
 
     try:
         async with msg.channel.typing():
+            # Asynchroner Aufruf via AsyncOpenAI-Client
             response = await openai_client.chat.completions.create(**kwargs)
 
-        # 5) Antwort extrahieren (stream=False => direct)
         assistant_content = response.choices[0].message.content
-
-        # 6) Antwort in channel_history packen
         channel_hist.append({"role": "assistant", "content": assistant_content})
 
-        # 7) An Discord schicken
-        #    Falls Text zu lang -> in Blöcken
+        # LaTeX erkennen
+        latex_expressions = extract_latex_expressions(assistant_content)
+        logging.info(f"LaTeX-Ausdrücke: {latex_expressions}")
+
+        # Antwort stückeln, falls > 2000 Zeichen
         MAX_DISCORD_LEN = 2000
         if len(assistant_content) <= MAX_DISCORD_LEN:
             await msg.reply(assistant_content)
         else:
-            # stückeln
             lines = assistant_content.split("\n")
             chunk = ""
             for line in lines:
@@ -200,6 +273,19 @@ async def on_message(msg: discord.Message):
             if chunk:
                 await msg.channel.send(chunk)
 
+        # Falls LaTeX, rendere Bild via CodeCogs
+        if latex_expressions:
+            try:
+                latex_image_buffer = await render_latex_image(latex_expressions)
+                if latex_image_buffer:
+                    file = discord.File(fp=latex_image_buffer, filename="latex.png")
+                    await msg.channel.send(file=file)
+                else:
+                    await msg.channel.send("Konnte kein LaTeX-Bild erzeugen (evtl. externer API-Fehler?).")
+            except Exception as e:
+                logging.warning(f"Fehler beim Rendern von LaTeX: {e}")
+                await msg.channel.send("LaTeX konnte nicht in ein Bild gerendert werden (CodeCogs-Dienst?).")
+
     except Exception as e:
         logging.exception("Fehler beim Erzeugen der Antwort")
         try:
@@ -207,24 +293,11 @@ async def on_message(msg: discord.Message):
         except:
             pass
 
-
-# ------------------------------------
-# 5) on_ready
-# ------------------------------------
-@discord_client.event
-async def on_ready():
-    logging.info(f"Bot eingeloggt als {discord_client.user} (ID: {discord_client.user.id})")
-
-
-# ------------------------------------
-# 6) main
-# ------------------------------------
 async def main():
     if not BOT_TOKEN:
-        logging.error("Es wurde kein bot_token in config.yaml gefunden!")
+        logging.error("Kein bot_token in config.yaml gefunden!")
         return
     await discord_client.start(BOT_TOKEN)
-
 
 if __name__ == "__main__":
     try:
