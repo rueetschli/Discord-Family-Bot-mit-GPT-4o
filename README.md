@@ -28,7 +28,7 @@ Willkommen bei Kevin, Deinem AI-basierten Discord-Bot! Du kannst ihn als persön
 
 ## Installation
 
-ieses Repository klonen oder herunterladen
+Dieses Repository klonen oder herunterladen
 requirements.txt installieren:
   ```bash
 pip install -r requirements.txt
