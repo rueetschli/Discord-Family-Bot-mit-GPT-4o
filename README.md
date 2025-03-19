@@ -41,7 +41,7 @@ python3 main.py
 ## Funktionen im Überblick
 
 - Chat: Kevin reagiert auf Deine Nachrichten im Kanal und in Direkt-Nachrichten.
-- PDF-Extraktion: Hänge ein PDF an oder schicke es direkt im Chat, Kevin liest den Text aus und berücksichtigt ihn in der Antwort.
+- Bilder & Pdf's werden an OpenAI gesendet, damit du mit Kevin darüber sprechen kannst. 
 - LaTeX-Erkennung: Formeln wie $$a^2 + b^2 = c^2$$ oder \[(a + b)^n\] rendert Kevin als PNG und hängt es an die Antwort an.
 - *Slash Commands*
   - /help: Zeigt eine kurze Übersicht aller verfügbaren Slash-Befehle.
@@ -51,7 +51,7 @@ python3 main.py
 
 ## Nutzungshinweise
 
-- Die PDF-Extraktion ist auf eine gewisse Textlänge begrenzt (siehe config.yaml).
+- Die PDF-Upload ist relativ neu. OpenAI hat das aktuell auf 100 Seite und 32MB begrenzt.
 - LaTeX wird via CodeCogs gerendert. Beachte die Nutzungsbedingungen.
 - Achte darauf, Deinen API-Key nicht versehentlich öffentlich zu machen.
 
