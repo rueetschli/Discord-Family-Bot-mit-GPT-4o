@@ -43,7 +43,11 @@ python3 main.py
 - Chat: Kevin reagiert auf Deine Nachrichten im Kanal und in Direkt-Nachrichten.
 - PDF-Extraktion: Hänge ein PDF an oder schicke es direkt im Chat, Kevin liest den Text aus und berücksichtigt ihn in der Antwort.
 - LaTeX-Erkennung: Formeln wie $$a^2 + b^2 = c^2$$ oder \[(a + b)^n\] rendert Kevin als PNG und hängt es an die Antwort an.
-- Alternative Modelle: Du kannst das Modell wechseln, um z. B. ein „denkendes“ Modell (z. B. o3-mini) zu verwenden. Baue dafür ein Slash-Command oder ein Textkommando (z. B. /Denken) ein.
+- *Slash Commands*
+  - /help: Zeigt eine kurze Übersicht aller verfügbaren Slash-Befehle.
+  - /suchen <frage>: Führt eine Websuche mit GPT-4o durch, um Informationen aus dem Internet einzubeziehen.
+  - /denken <prompt>: Verwendet das schnell rechnende Modell o3-mini, z. B. um komplexere Gedankengänge oder Zwischenschritte auszulagern.
+  - /bild <prompt> <format>: Erzeugt ein Bild mit DALL-E 3 auf Basis des Prompts. Das Format kann „quadratisch“, „hoch“ oder „breit“ gewählt werden.
 
 ## Nutzungshinweise
 
