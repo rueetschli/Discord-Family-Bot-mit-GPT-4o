@@ -122,60 +122,81 @@ async def render_latex_image(latex_expressions):
     return buf
 
 ##############################################################################
-# 5) PDF-EXTRAKTION
+# 5) HANDLING VON ATTACHMENTS (NEU: PDF-Upload via OpenAI-Files-API)
 ##############################################################################
 MAX_TEXT = cfg.get("max_text", 1500)
 
-async def convert_attachments_to_gpt4v_format(msg: discord.Message):
+async def build_message_content(msg: discord.Message):
     """
-    Liest Attachments (Bilder, PDFs, Text) aus und wandelt sie in GPT-4Vision-ähnliches
-    Format um. (Falls du es brauchst)
+    Nimmt eine Discord-Nachricht und wandelt sie in ein Format um,
+    das dem ChatCompletion 'messages' entspricht (role + content).
+    
+    Neu: PDFs werden per OpenAI-Files-API hochgeladen und dann als "file" an die API gegeben.
+    Bilder/Text bleiben beim alten Mechanismus: 
+      - Bilder -> image_url (ggf. base64)
+      - Text   -> text
     """
     contents = []
+    
+    # 1) Zuerst den Text der Nachricht
     text_part = msg.content.strip()
     if text_part:
         contents.append({"type": "text", "text": text_part[:MAX_TEXT]})
 
+    # 2) Dann Attachments verarbeiten
     for att in msg.attachments:
         ctype = att.content_type or ""
         try:
             data = await att.read()
-            if any(t in ctype for t in ("image/", "pdf", "text")):
-                if ctype.startswith("image/"):
+
+            # PDF
+            if "pdf" in ctype.lower():
+                # 2.1) Datei via Files-API hochladen
+                try:
+                    uploaded_file = await openai_client.files.create(
+                    file=(att.filename, data, "application/pdf"),
+                    purpose="user_data"
+                    )
+
+                    # 2.2) "type": "file" + "file_id"
                     contents.append({
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{ctype};base64,{b64encode(data).decode('utf-8')}"}
+                        "type": "file",
+                        "file": {
+                            "file_id": uploaded_file.id
+                        }
                     })
-                elif "pdf" in ctype:
-                    try:
-                        import pdfplumber
-                        with pdfplumber.open(io.BytesIO(data)) as pdf:
-                            text_str = ""
-                            for page in pdf.pages:
-                                page_text = page.extract_text()
-                                if page_text:
-                                    text_str += page_text + "\n"
-                        text_str = text_str.strip()
-                        if text_str:
-                            if contents and contents[-1]["type"] == "text":
-                                contents[-1]["text"] += f"\n{text_str[:MAX_TEXT]}"
-                            else:
-                                contents.append({"type": "text", "text": text_str[:MAX_TEXT]})
-                    except Exception as e:
-                        logging.warning(f"Fehler beim Extrahieren des Textes aus {att.filename}: {e}")
-                elif ctype.startswith("text/"):
-                    text_str = data.decode("utf-8", errors="replace")
-                    if contents and contents[-1]["type"] == "text":
-                        contents[-1]["text"] += f"\n{text_str}"
-                    else:
-                        contents.append({"type": "text", "text": text_str[:MAX_TEXT]})
+                except Exception as e:
+                    logging.warning(f"Fehler beim Upload des PDF {att.filename}: {e}")
+                    # Fallback: anstelle des PDF-Uploads -> normaler Text-Eintrag
+                    contents.append({"type": "text", "text": f"[PDF-Upload fehlgeschlagen: {att.filename}]"})
+
+            # IMAGE
+            elif ctype.startswith("image/"):
+                # Optional: Könnte man auch als "file" hochladen, 
+                # aber wir lassen es bei base64-Bild-Variante, 
+                # falls du Vision-Funktionen brauchst.
+                b64_img = b64encode(data).decode("utf-8")
+                contents.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{ctype};base64,{b64_img}"}
+                })
+
+            # TEXT
+            elif ctype.startswith("text/"):
+                text_str = data.decode("utf-8", errors="replace")
+                if contents and contents[-1]["type"] == "text":
+                    contents[-1]["text"] += f"\n{text_str[:MAX_TEXT]}"
                 else:
-                    logging.info(f"Unbekannter Dateityp: {ctype}")
+                    contents.append({"type": "text", "text": text_str[:MAX_TEXT]})
+
             else:
-                logging.info(f"Attachment {att.filename} mit unzulässigem Typ {ctype}")
+                # Unbekannter Typ -> wir hängen einen Hinweis an
+                logging.info(f"Attachment {att.filename} mit unbekanntem Typ {ctype}")
+                contents.append({"type": "text", "text": f"[Attachment: {att.filename}, Typ {ctype}]"})
         except Exception as e:
             logging.warning(f"Fehler beim Lesen von {att.filename}: {e}")
 
+    # Falls gar nix drin war:
     if not contents:
         return ""
     if len(contents) == 1 and contents[0]["type"] == "text":
@@ -209,20 +230,24 @@ async def on_message(msg: discord.Message):
 async def handle_normal_message(msg: discord.Message):
     """
     Normaler Chat, der die Chat-Completions-API mit 'model=DEFAULT_MODEL' nutzt.
+    PDFs werden als 'file' an das Modell gesendet.
     """
     channel_id = msg.channel.id
     channel_hist = channel_history[channel_id]
 
+    # Einmalig System-Prompt
     if SYSTEM_PROMPT and not channel_hist:
         channel_hist.append({"role": "system", "content": SYSTEM_PROMPT})
 
-    user_content = await convert_attachments_to_gpt4v_format(msg)
+    # 1) Baue Content für diese user-Message
+    user_content = await build_message_content(msg)
     channel_hist.append({"role": "user", "content": user_content})
 
     # Älteste entfernen
     while len(channel_hist) > 2 * MAX_MESSAGES:
         channel_hist.pop(0)
 
+    # 2) ChatCompletion-Aufruf
     kwargs = {
         "model": DEFAULT_MODEL,
         "messages": channel_hist,
@@ -278,7 +303,8 @@ async def help_command(interaction: discord.Interaction):
         "1. `/suche <frage>` – Nutzt GPT-4o mit Websuche.\n"
         "2. `/denken <prompt>` – Nutzt das Modell o3-mini für schnelles Reasoning.\n"
         "3. `/bild <prompt> <format>` – Erzeugt ein Bild mit DALL-E 3.\n\n"
-        f"Zusätzlich kann man normal chatten (Modell: {DEFAULT_MODEL})."
+        f"Zusätzlich kann man normal chatten (Modell: {DEFAULT_MODEL}).\n"
+        "PDFs bitte direkt anhängen, Kevin lädt sie dann zur API hoch."
     )
     await interaction.response.send_message(txt, ephemeral=True)
 
@@ -286,10 +312,6 @@ async def help_command(interaction: discord.Interaction):
 # HILFSFUNKTIONEN FÜR /SUCHEN UND /DENKEN (RESPONSES-API)
 ##############################################################################
 def extract_text_from_content(content) -> str:
-    """
-    content kann entweder ein String oder eine Liste von Dicts sein.
-    Diese Funktion extrahiert reinen Text.
-    """
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -299,29 +321,14 @@ def extract_text_from_content(content) -> str:
                 text_parts.append(c.get("text", ""))
             elif c.get("type") == "image_url":
                 text_parts.append("[Bild-Anhang]")
+            elif c.get("type") == "file":
+                text_parts.append("[PDF-Datei an OpenAI gesendet]")
             else:
                 text_parts.append(str(c))
         return "\n".join(text_parts)
     return str(content)
 
 def build_responses_input_from_history(channel_hist, new_prompt=None):
-    """
-    Baut ein Array für 'input=[...]' nach dem Schema des Playground-Beispiels:
-      [
-        {
-          "role": "user"|"assistant",
-          "content": [
-            {
-              "type": "input_text"|"output_text",
-              "text": "..."
-            }
-          ]
-        },
-        ...
-      ]
-
-    new_prompt (falls != None) wird als neue user-Nachricht angehängt.
-    """
     input_array = []
 
     for item in channel_hist:
@@ -345,10 +352,9 @@ def build_responses_input_from_history(channel_hist, new_prompt=None):
                 ]
             })
         else:
-            # "system" o.Ä. überspringen oder ggf. als user?
+            # system -> ignorieren oder ähnlich
             pass
 
-    # Neue user-Nachricht
     if new_prompt:
         input_array.append({
             "role": "user",
@@ -360,9 +366,6 @@ def build_responses_input_from_history(channel_hist, new_prompt=None):
     return input_array
 
 async def send_long_followup(interaction: discord.Interaction, text: str):
-    """
-    Sendet lange Texte auf mehrere Followups aufgeteilt.
-    """
     MAX_LEN = 2000
     if len(text) <= MAX_LEN:
         await interaction.followup.send(text)
@@ -388,12 +391,10 @@ async def suche_command(interaction: discord.Interaction, prompt: str):
     channel_id = interaction.channel_id
     channel_hist = channel_history[channel_id]
 
-    # Historie + Prompt in passendes Format
     input_for_responses = build_responses_input_from_history(channel_hist, new_prompt=prompt)
 
     try:
         async with interaction.channel.typing():
-            # Wie im Playground-Beispiel:
             response = await openai_client.responses.create(
                 model="gpt-4o",
                 input=input_for_responses,
@@ -402,7 +403,7 @@ async def suche_command(interaction: discord.Interaction, prompt: str):
                         "type": "text"
                     }
                 },
-                reasoning={},  # optional, kann leer sein
+                reasoning={},
                 tools=[
                     {
                         "type": "web_search_preview",
@@ -427,13 +428,11 @@ async def suche_command(interaction: discord.Interaction, prompt: str):
 
     assistant_content = response.output_text or "(Keine Antwort)"
 
-    # In den Verlauf übernehmen
     channel_hist.append({"role": "user", "content": prompt})
     channel_hist.append({"role": "assistant", "content": assistant_content})
 
     await send_long_followup(interaction, assistant_content)
 
-    # LaTeX
     latex_expressions = extract_latex_expressions(assistant_content)
     if latex_expressions:
         try:
@@ -450,14 +449,10 @@ async def suche_command(interaction: discord.Interaction, prompt: str):
 @tree.command(name="denken", description="Nutze das o3-mini Modell.")
 @app_commands.describe(prompt="Dein Prompt für das kleine Reasoning-Modell")
 async def denken_command(interaction: discord.Interaction, prompt: str):
-    """
-    Nutzt die Responses-API mit model='o3-mini', so wie im Playground-Beispiel.
-    """
     await interaction.response.defer()
     channel_id = interaction.channel_id
     channel_hist = channel_history[channel_id]
 
-    # Historie + Prompt in passendes Format
     input_for_responses = build_responses_input_from_history(channel_hist, new_prompt=prompt)
 
     try:
@@ -475,7 +470,6 @@ async def denken_command(interaction: discord.Interaction, prompt: str):
                 },
                 tools=[],
                 store=True
-                # Hier KEIN max_output_tokens, da Playground-Beispiel es nicht zeigt
             )
     except Exception as e:
         logging.exception("Fehler bei /denken")
@@ -484,7 +478,6 @@ async def denken_command(interaction: discord.Interaction, prompt: str):
 
     assistant_content = response.output_text or "(Keine Antwort)"
 
-    # In den Verlauf übernehmen
     channel_hist.append({"role": "user", "content": prompt})
     channel_hist.append({"role": "assistant", "content": assistant_content})
 
@@ -545,7 +538,6 @@ async def bild_command(interaction: discord.Interaction, prompt: str, format: st
 
     await interaction.followup.send(f"Hier dein Bild:\n{image_url}")
 
-    # Optional im Chat-Verlauf
     channel_id = interaction.channel_id
     channel_hist = channel_history[channel_id]
     if SYSTEM_PROMPT and not channel_hist:
