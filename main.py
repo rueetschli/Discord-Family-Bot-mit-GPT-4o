@@ -470,7 +470,7 @@ def map_content_for_responses(role: str, raw_content):
                     data = c.get("b64")
                     mime = c.get("mime_type", "image/jpeg")
                     if data:
-                        # WICHTIG: Responses-API erwartet image_url als String; Base64 daher als Data-URL
+                        # Responses-API erwartet image_url als String; Base64 daher als Data-URL
                         blocks.append({
                             "type": "input_image",
                             "image_url": f"data:{mime};base64,{data}",
@@ -560,33 +560,6 @@ def _extract_response_text(resp) -> str:
     except Exception:
         return ""
 
-async def _ask_with_auto_continue(input_messages: List[Dict[str, Any]], instructions: Optional[str]) -> str:
-    """Fordert Antwort an und holt bei Bedarf bis zu 2 Fortsetzungen."""
-    combined = ""
-    rounds = 0
-    while True:
-        resp = await _responses_call(input_messages, instructions)
-        txt = _extract_response_text(resp)
-        if txt:
-            combined += ("\n\n" if combined else "") + txt
-
-        want_more = False
-        if txt and not txt.strip().endswith((".", "!", "?", "»")):
-            want_more = True
-        if txt and len(txt) > 1800 and rounds < 2:
-            want_more = True
-
-        if not want_more or rounds >= 2:
-            break
-
-        input_messages.append({
-            "role": "user",
-            "content": [{"type": "input_text", "text": "Bitte fahre genau dort fort, wo du aufgehört hast."}]
-        })
-        rounds += 1
-
-    return combined or "(Keine Antwort, Eingabe evtl. ungueltig formatiert oder nicht verarbeitbar.)"
-
 async def handle_normal_message(msg: discord.Message):
     channel_id = str(msg.channel.id)
     if channel_id not in channel_history or not channel_history[channel_id]:
@@ -618,7 +591,8 @@ async def handle_normal_message(msg: discord.Message):
 
     try:
         async with msg.channel.typing():
-            assistant_content = await _ask_with_auto_continue(input_messages, SYSTEM_PROMPT)
+            resp = await _responses_call(input_messages, SYSTEM_PROMPT)
+            assistant_content = _extract_response_text(resp) or "(Keine Antwort)"
 
         channel_history[channel_id].append({"role": "assistant", "content": assistant_content})
         await save_message_to_db(channel_id, "assistant", assistant_content)
@@ -689,13 +663,6 @@ async def suche_command(interaction: discord.Interaction, prompt: str):
                 store=True
             )
         content = _extract_response_text(resp)
-        if not content or (len(content) > 1800 and not content.strip().endswith((".", "!", "?"))):
-            input_messages.append({
-                "role": "user",
-                "content": [{"type": "input_text", "text": "Bitte fahre genau dort fort, wo du aufgehört hast."}]
-            })
-            more = await _ask_with_auto_continue(input_messages, SYSTEM_PROMPT)
-            content = (content + "\n\n" + more).strip() if content else more
 
     except Exception as e:
         logging.exception("Fehler bei /suche")
