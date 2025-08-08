@@ -1,8 +1,10 @@
-discord.py>=2.3.2
-httpx>=0.23.0
-openai>=1.0.0
+discord.py[voice]>=2.5.2
+httpx>=0.25.0
+openai>=1.99.0
 PyYAML>=6.0
 matplotlib>=3.6
 PyNaCl
 pdfplumber>=0.5.28
 pillow>=9.0.0
+aiomysql>=0.0.21
+aioftp>=0.10.0
