@@ -45,8 +45,8 @@ python3 main.py
 - LaTeX-Erkennung: Formeln wie $$a^2 + b^2 = c^2$$ oder \[(a + b)^n\] rendert Kevin als PNG und hängt es an die Antwort an.
 - *Slash Commands*
   - /help: Zeigt eine kurze Übersicht aller verfügbaren Slash-Befehle.
-  - /suchen <frage>: Führt eine Websuche mit GPT-4o durch, um Informationen aus dem Internet einzubeziehen.
-  - /denken <prompt>: Verwendet das schnell rechnende Modell o3-mini, z. B. um komplexere Gedankengänge oder Zwischenschritte auszulagern.
+  - /suchen <frage>: Führt eine Websuche mit GPT-5 durch, um Informationen aus dem Internet einzubeziehen.
+  - /vergessen: Löscht das Wissen aus dem aktuellen Kanal.
   - /bild <prompt> <format>: Erzeugt ein Bild mit DALL-E 3 auf Basis des Prompts. Das Format kann „quadratisch“, „hoch“ oder „breit“ gewählt werden.
 
 ## Nutzungshinweise
@@ -65,7 +65,7 @@ python3 main.py
 
 ## Warnungen & Hinweise
 **Kosten / Tokenverbrauch**
-- GPT-4o Vision analysiert Bilder und PDFs; das kann schnell Tokens kosten.
+- GPT-5 analysiert Bilder und PDFs; das kann schnell Tokens kosten.
 - DALL·E 3-Bilder kosten je nach Prompt/Ergebnis.
 **Rate Limits**
 - OpenAI hat Rate Limits, Discord ebenso. Bei zu vielen Messages in kurzer Zeit kann es zu Verzögerungen kommen.
@@ -74,7 +74,7 @@ python3 main.py
 **Große PDFs**
 - Kürzen die PDF-Auszüge auf die gewünschte Anzahl Zeichen. Bei sehr langen Dokumenten musst du ggf. manuell aufteilen.
 **Vision-Qualität**
-- GPT-4o Vision ist nicht unfehlbar (besonders bei kleinen Details, Text in Bildern, speziellen Grafiken).
+- GPT-5 ist nicht unfehlbar (besonders bei kleinen Details, Text in Bildern, speziellen Grafiken).
 
 
 <img width="539" alt="image" src="https://github.com/user-attachments/assets/a1c002ea-5b67-4365-a734-9b23f5e474c7" />
