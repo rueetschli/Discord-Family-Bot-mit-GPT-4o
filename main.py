@@ -20,7 +20,7 @@ import yaml
 import aiomysql
 import aioftp
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, APITimeoutError
 from PIL import Image
 
 # -----------------------------------------------------------------------------
@@ -51,6 +51,11 @@ if not BOT_TOKEN:
 provider, default_model = cfg["model"].split("/", 1)
 base_url = cfg["providers"][provider]["base_url"]
 api_key  = cfg["providers"][provider].get("api_key", "sk-???")
+
+# --- NEU: zentrale Timeout-/Retry-Defaults (per config überschreibbar) -------
+OPENAI_TIMEOUT_SEC = cfg.get("timeouts", {}).get("openai_seconds", 300)
+OPENAI_RETRIES     = cfg.get("timeouts", {}).get("openai_retries", 2)
+OPENAI_BACKOFFS    = cfg.get("timeouts", {}).get("openai_backoff", [2.0, 5.0, 10.0])
 
 # -----------------------------------------------------------------------------
 # 2) OPENAI CLIENT
@@ -587,9 +592,23 @@ async def send_long_followup(interaction: discord.Interaction, text: str):
     for chunk in _chunk_text_for_discord(text):
         await interaction.followup.send(chunk)
 
-async def _responses_call(input_messages, instructions: Optional[str], *, timeout: float = 120.0):
+# --- NEU: generischer Retry-Wrapper für OpenAI-Requests ----------------------
+async def _create_with_retry(factory_coro):
+    last_err = None
+    for attempt in range(OPENAI_RETRIES + 1):
+        try:
+            return await factory_coro()
+        except (APITimeoutError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
+            last_err = e
+            if attempt < OPENAI_RETRIES:
+                await asyncio.sleep(OPENAI_BACKOFFS[min(attempt, len(OPENAI_BACKOFFS)-1)])
+                continue
+            raise
+
+async def _responses_call(input_messages, instructions: Optional[str], *, timeout: float = None):
+    timeout = timeout or OPENAI_TIMEOUT_SEC
     client_long = openai_client.with_options(timeout=timeout)
-    return await client_long.responses.create(
+    return await _create_with_retry(lambda: client_long.responses.create(
         model=DEFAULT_MODEL,
         input=input_messages,
         instructions=instructions or None,
@@ -599,7 +618,7 @@ async def _responses_call(input_messages, instructions: Optional[str], *, timeou
         },
         reasoning={"effort": cfg.get("search", {}).get("reasoning_effort", "medium")},
         **cfg.get("extra_api_parameters", {})
-    )
+    ))
 
 def _extract_response_text(resp) -> str:
     txt = getattr(resp, "output_text", None) or ""
@@ -731,8 +750,8 @@ async def suche_command(interaction: discord.Interaction, prompt: str):
 
     try:
         async with interaction.channel.typing():
-            client_long = openai_client.with_options(timeout=120.0)
-            resp = await client_long.responses.create(
+            client_long = openai_client.with_options(timeout=OPENAI_TIMEOUT_SEC)
+            resp = await _create_with_retry(lambda: client_long.responses.create(
                 model=DEFAULT_MODEL,
                 input=input_messages,
                 instructions=web_instructions,
@@ -743,13 +762,13 @@ async def suche_command(interaction: discord.Interaction, prompt: str):
                 },
                 reasoning={"effort": cfg.get("search", {}).get("reasoning_effort", "high")},
                 store=True
-            )
+            ))
 
         content = _extract_response_text(resp) or ""
 
         # Fallback, falls das Modell trotzdem Befehle empfiehlt
         if "slash-command" in content.lower() or "/suche" in content.lower():
-            resp = await client_long.responses.create(
+            resp = await _create_with_retry(lambda: client_long.responses.create(
                 model=DEFAULT_MODEL,
                 input=input_messages,
                 instructions=web_instructions + " Antworte jetzt ohne Hinweis auf Befehle.",
@@ -757,7 +776,7 @@ async def suche_command(interaction: discord.Interaction, prompt: str):
                 text={"verbosity": "high", "format": {"type": "text"}},
                 reasoning={"effort": "high"},
                 store=True
-            )
+            ))
             content = _extract_response_text(resp) or content
 
     except Exception as e:
@@ -781,8 +800,6 @@ async def suche_command(interaction: discord.Interaction, prompt: str):
                 await interaction.followup.send(file=file)
         except Exception as e:
             logging.warning(f"Fehler beim Rendern von LaTeX: {e}")
-
-
 
 @tree.command(name="bild", description="Erzeuge ein Bild mit gpt-image-1.")
 @app_commands.describe(
