@@ -1,17 +1,17 @@
-# Beispielkonfiguration
+# Konfig
 
 # Bot-Token und Client-ID (für den Invite-Link)
-bot_token: "DEIN-Discord-Bot-Token"
-client_id: "Deine-Client-ID"
+bot_token: "DEIN-TOKEN"
+client_id: "DEINE-ID"
 
 # Statusnachricht (wird als Custom Activity gesetzt)
-status_message: "Powered by OpenAI"
+status_message: "wie weit Skynet ist...."
 
 # Erlaube Direktnachrichten?
 allow_dms: true
 
 #Erinnerungen Anzahlmax_messages: 10
-max_messages: 10
+max_messages: 20
 
 
 # Berechtigungen für Nutzer, Rollen und Channels (kann leer bleiben, da Whitelist separat gehandhabt wird)
@@ -27,21 +27,33 @@ permissions:
     blocked_ids: []
 
 # Modell und Anbieter im Format "anbieter/modell"
-model: "openai/gpt-4o"
+# model: "openai/gpt-4o" neu: gpt-4.1
+model: "openai/gpt-5"
+
+# Optional: Parameter für /suche und normale Antworten via Responses API
+search:
+  verbosity: "high"          # low | medium | high (GPT-5 unterstützt 'verbosity')
+  reasoning_effort: "high"   # minimal | low | medium | high (GPT-5 unterstützt feinere Abstufungen)
+  max_output_tokens: 2000
+
+
+# Realtime-API Einstellungen
+realtime:
+  model: "gpt-4o-realtime-v1" # Das spezifische Realtime-Modell
+  voice: "ash" # Stimme des Bots (z.B. alloy, ash, ballad, coral, echo, fable, onyx, nova, sage, shimmer, verse)
+# Die Instruktionen für die Stimme werden aus dem Haupt-System-Prompt übernommen
+
 
 # Anbieter-Einstellungen
 providers:
   openai:
     base_url: "https://api.openai.com/v1"
-    api_key: "DEIN-OPENAI-API-KEY"
+    api_key: "DEIN-OPENAI-KEY"
 
 # Maximale Zeichen aus Textinhalten pro Nachricht (bei Anhängen)
-# Hier bewusst hoch gesetzt, um möglichst viel Text (aber nicht das gesamte Kontextfenster) zu ermöglichen
 max_text: 60000
-
 # Maximale Anzahl der Bilder pro Nachricht (falls Bildmodelle unterstützt werden)
 max_images: 30
-
 # Maximale Anzahl von Nachrichten im Konversationsverlauf, die rückwärts abgerufen werden
 max_messages: 100
 
@@ -49,7 +61,24 @@ max_messages: 100
 use_plain_responses: false
 
 # System-Prompt, der am Ende der Nachrichtenkette angehängt wird
-system_prompt: "Du bist ein hilfreicher Discord-Bot namens Kevin. Antworte möglichst ausführlich und benutze präzise Formulierungen. Zeige auch immer, wenn möglich, den Lösungsweg auf."
+system_prompt: "Du bist ein hilfreicher Discord-Bot namens Kevin. Antworte möglichst ausführlich und benutze präzise Formulierungen. Frage nach, wenn etwas zu wage formuliert ist. Ist ein Promt nicht gut, erkähre dem Benutzer wie ein guter Promt aussehen könnte. Zeige auch immer den Lösungsweg auf. Achtung: Deine Antworten erscheinen im Discord-Chat. Verwende LaTeX-Ausdrücke nur im Notfall. Verwende die gängigen Discord-Formatierungen um die Chat-Nachricht schön aussehen zu lassen. Du bist in der Schweiz im Einsatz. Verwende die schweizer Rechtschreibung. Verwende keine scharfen S. Du heisst Kevin und bassierst auf OpenAIs API. Der Entwickler, der diesen Bot erstellt hat heisst Michael Rueetschli. Du bist ein Discord-Bot und verfügst über Slash-Commands. Wenn jemand echtzeitdaten möchte, sage ihm, dass er / suche nutzen muss. Wenn jemand ein Bild erstellen möchte, soll er / Bild nutzen. Wenn er ein denkendes Modell o3 nutzen möchte, dann soll der Benutzer / denken verwenden. "
 
 # Extra API-Parameter, falls benötigt
 extra_api_parameters: {}
+
+# Datenbank-Konfiguration (MySQL/MariaDB)
+database:
+  host: "HOST-IP"
+  port: 3306
+  name: "BENUTZERNAME"
+  user: "USER"
+  password: "DB-PASSWORT"
+  
+# FTP-Zugang:
+ftp:
+  host: "FTP-IP"
+  port: 21
+  user: "FTP_USER"
+  password: "FTP-PASSWORT"
+  base_url: "URL"
+  remote_dir: "REMOTE-DIR" 
