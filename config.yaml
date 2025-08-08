@@ -32,9 +32,14 @@ model: "openai/gpt-5"
 
 # Optional: Parameter für /suche und normale Antworten via Responses API
 search:
-  verbosity: "high"          # low | medium | high (GPT-5 unterstützt 'verbosity')
-  reasoning_effort: "high"   # minimal | low | medium | high (GPT-5 unterstützt feinere Abstufungen)
-  max_output_tokens: 2000
+  user_location:
+    type: approximate
+    country: CH
+    region: Solothurn
+    city: Rüttenen
+  search_context_size: high
+  verbosity: high
+  reasoning_effort: high
 
 
 # Realtime-API Einstellungen
